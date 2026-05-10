@@ -1,5 +1,5 @@
 ---
-title: "Final Project: Twitter Sentiment Classifier"
+title: "Twitter Sentiment Classifier"
 subtitle: "PSTAT 131"
 author: "Aaron Chen-Xiao, Yumeng Guo, Sophia Leng, Sahand Shafieha, Olivia Shao"
 date: "06/12/2026"
