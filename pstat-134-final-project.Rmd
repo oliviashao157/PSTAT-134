@@ -1,0 +1,131 @@
+---
+title: "Final Project: Twitter Sentiment Classifier"
+subtitle: "PSTAT 131"
+author: "Aaron Chen-Xiao, Yumeng Guo, Sophia Leng, Sahand Shafieha, Olivia Shao"
+date: "06/12/2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    number_sections: false
+    code_folding: hide
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+# knit options
+knitr::opts_chunk$set(echo = T,
+                      results = 'markup',
+                      fig.width = 4,
+                      fig.height = 3,
+                      fig.align = 'center',
+                      message = F,
+                      warning = F)
+
+# packages
+library(tidyverse)
+library(faraway)
+library(data.table)
+library(dplyr)
+library(tidymodels)
+library(lubridate)
+library(hms)
+library(stringr)
+library(tidytext)
+```
+
+Here is what was done in the data cleaning process:
+
+1.  Added column names per project_memo submitted previously
+2.  Checked for the following:
+    1.  Missing values
+    2.  Duplicated rows
+3.  Checked the levels of columns and removed the columns that had one level and weren't useful
+4.  Split the `date` column into `date` and `time_pdt`
+5.  Binarized sentiment
+6.  Cleaned up `text` column
+7.  Tokenized and removed stop words for future TF-IDF feature extraction
+
+```{r}
+# load the dataset
+twitter <- read_csv("sample_50k.csv")
+# adding back the column names
+colnames(twitter) <- c("sentiment", "id", "date", "query", "user", "text")
+
+# Check for missing values
+colSums(is.na(twitter))
+# Check summary stats for sentiment
+summary(twitter$sentiment)
+# Check for duplicated rows
+sum(duplicated(twitter))
+
+# View levels of query
+unique(twitter$query) 
+# We only have 1 level "NO_QUERY" so we can drop it
+twitter_cleaned <- twitter %>% select(-query)
+
+# Split date column into date, time, and time_zone
+twitter_cleaned <- twitter_cleaned %>%
+  mutate(date_raw = date) %>%
+  mutate(
+    # Extract timezone before parsing
+    time_zone = sub(".*\\s(\\S+)\\s\\d{4}$", "\\1", date_raw),
+    
+    # Strip timezone from string, then parse
+    parsed_dt = parse_date_time(
+      sub("(.*?)\\s+\\S+(\\s+\\d{4})$", "\\1\\2", date_raw),
+      orders = "a b d H:M:S Y"
+    ),
+    
+    # Extract and format date as MM/DD/YYYY, stored as Date type
+    date = as.Date(format(parsed_dt, "%m/%d/%Y"), format = "%m/%d/%Y"),
+    
+    # Extract time and store as hms
+    time = as_hms(format(parsed_dt, "%H:%M:%S"))
+  ) %>%
+  select(-parsed_dt, -date_raw)
+
+unique(twitter_cleaned$time_zone)
+# I noticed that every time zone in the dataset is in PDT so I drop the column.
+# And renamed the time column into time_pdt
+twitter_cleaned <- twitter_cleaned %>% select(-time_zone)
+twitter_cleaned <- twitter_cleaned %>%
+  rename(time_pdt = time)
+
+# Binarize sentiment (0 = negative, 1 = positive)
+twitter_cleaned <- twitter_cleaned %>%
+  mutate(sentiment = factor(sentiment, levels = c(0, 1), labels = c("Negative", "Positive")))
+
+# Clean up the text
+twitter_cleaned <- twitter_cleaned %>%
+  mutate(text = str_to_lower(text),                          # lowercase
+         text = str_remove_all(text, "@\\w+"),               # remove @mentions
+         text = str_remove_all(text, "http\\S+|www\\S+"),    # remove URLs
+         text = str_remove_all(text, "[^a-z\\s]"),           # remove punctuation/numbers
+         text = str_squish(text))                            # remove extra whitespace
+
+# Tokenize and remove stop words
+twitter_cleaned <- twitter_cleaned %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word")
+
+head(twitter_cleaned, n = 10)
+```
+
+```{=html}
+<script>
+window.onload = function() {
+  var buttons = document.querySelectorAll("button.code-folding-btn");
+  buttons.forEach(function(btn) {
+    if (btn.innerText.trim() === "Show") {
+      btn.innerText = "Show Code";
+    }
+    if (btn.innerText.trim() === "Hide") {
+      btn.innerText = "Hide Code";
+    }
+  });
+};
+</script>
+```
