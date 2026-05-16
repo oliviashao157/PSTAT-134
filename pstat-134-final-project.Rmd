@@ -46,7 +46,7 @@ Here is what was done in the data cleaning process:
 4.  Split the `date` column into `date` and `time_pdt`
 5.  Binarized sentiment
 6.  Cleaned up `text` column
-7.  Tokenized and removed stop words for future TF-IDF feature extraction
+7.  Tokenized and removed stop words for both unigrams and bigrams for future feature extraction
 
 ```{r}
 # load the dataset
@@ -106,12 +106,23 @@ twitter_cleaned <- twitter_cleaned %>%
          text = str_remove_all(text, "[^a-z\\s]"),           # remove punctuation/numbers
          text = str_squish(text))                            # remove extra whitespace
 
-# Tokenize and remove stop words
-twitter_cleaned <- twitter_cleaned %>%
+# Create unigrams (single words)
+twitter_unigrams <- twitter_cleaned %>%
   unnest_tokens(word, text) %>%
   anti_join(stop_words, by = "word")
 
-head(twitter_cleaned, n = 10)
+# Create bigrams (two words)
+twitter_bigrams <- twitter_cleaned %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  # Remove bigrams that contain stop words in either word
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word) %>%
+  unite(bigram, word1, word2, sep = " ")
+
+# View samples
+head(twitter_unigrams, n = 10)
+head(twitter_bigrams, n = 10)
 ```
 
 ```{=html}
