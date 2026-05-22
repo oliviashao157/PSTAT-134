@@ -51,7 +51,7 @@ Here is what was done in the data cleaning process:
 4.  Split the `date` column into `date` and `time_pdt`
 5.  Binarized sentiment
 6.  Cleaned up `text` column
-7.  Tokenized and removed stop words for future TF-IDF feature extraction
+7.  Tokenized and removed stop words for both unigrams and bigrams for future feature extraction
 
 ```{r}
 # load the dataset
