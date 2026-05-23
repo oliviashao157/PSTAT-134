@@ -18,8 +18,8 @@ output:
 # knit options
 knitr::opts_chunk$set(echo = T,
                       results = 'markup',
-                      fig.width = 4,
-                      fig.height = 3,
+                      fig.width = 8,
+                      fig.height = 6,
                       fig.align = 'center',
                       message = F,
                       warning = F)
@@ -34,7 +34,12 @@ library(lubridate)
 library(hms)
 library(stringr)
 library(tidytext)
+library(wordcloud)
+library(igraph)
+library(ggraph)
 ```
+
+## Data Cleaning
 
 Here is what was done in the data cleaning process:
 
@@ -54,6 +59,9 @@ twitter <- read_csv("sample_50k.csv")
 # adding back the column names
 colnames(twitter) <- c("sentiment", "id", "date", "query", "user", "text")
 
+# Balanced Dataset
+twitter %>%
+  count(sentiment)
 # Check for missing values
 colSums(is.na(twitter))
 # Check summary stats for sentiment
@@ -103,40 +111,152 @@ twitter_cleaned <- twitter_cleaned %>%
   mutate(text = str_to_lower(text),                          # lowercase
          text = str_remove_all(text, "@\\w+"),               # remove @mentions
          text = str_remove_all(text, "http\\S+|www\\S+"),    # remove URLs
+         text = str_remove_all(text, "\\bi['’]ll\\b"),       # remove contractions
+         text = str_remove_all(text, "\\bi['’]d\\b"),
+         text = str_remove_all(text, "\\bi['’]m\\b"),
+         text = str_remove_all(text, "\\bi['’]ve\\b"),
          text = str_remove_all(text, "[^a-z\\s]"),           # remove punctuation/numbers
          text = str_squish(text))                            # remove extra whitespace
 
-# Create unigrams (single words)
-twitter_unigrams <- twitter_cleaned %>%
+```
+
+
+```{r}
+# First create row_id entry for each tweet, select only row_id, sentiment vaue, and text
+twitter_cleaned <- twitter_cleaned %>%
+  mutate(row_id = row_number()) %>%
+  select(row_id, sentiment, text)
+```
+
+### Testing/Training Split
+We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance. 
+
+```{r}
+# Testing Training Split
+set.seed(1)
+
+twitter_split <- initial_split(
+  twitter_cleaned,
+  prop = 0.80,
+  strata = sentiment
+)
+
+twitter_train <- training(twitter_split)
+twitter_test <- testing(twitter_split)
+```
+
+## Tokenizing/TF-IDF for Training Data
+
+```{r}
+# Unigrams TF-IDF
+unigram_train <- twitter_train %>%
   unnest_tokens(word, text) %>%
-  anti_join(stop_words, by = "word")
+  anti_join(stop_words, by = "word") %>%
+  count(row_id, sentiment, word, name = "n") %>%
+  bind_tf_idf(
+    term = word,
+    document = row_id,
+    n = n
+  )
 
-# Create bigrams (two words)
-twitter_bigrams <- twitter_cleaned %>%
-  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
-  # Remove bigrams that contain stop words in either word
+head(unigram_train, n = 10)
+
+top_unigram_words <- unigram_train %>%
+  count(word, sort = TRUE) %>%
+  slice_head(n = 5000) %>%
+  pull(word)
+
+unigram_train <- unigram_train %>%
+  filter(word %in% top_unigram_words)
+
+unigram_train_wide <- unigram_train %>%
+  select(row_id, sentiment, word, tf_idf) %>%
+  pivot_wider(
+    names_from = word,
+    values_from = tf_idf,
+    values_fill = 0,
+    names_prefix = "word_"
+  )
+```
+
+```{r}
+# Bigrams TF-IDF
+bigram_train <- twitter_train %>%
+  unnest_tokens(bigram, text, token = "ngrams", n=2)  %>%
   separate(bigram, c("word1", "word2"), sep = " ") %>%
-  filter(!word1 %in% stop_words$word,
-         !word2 %in% stop_words$word) %>%
-  unite(bigram, word1, word2, sep = " ")
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  unite(bigram, word1, word2, sep = " ") %>%
+  count(row_id, sentiment, bigram, name = "n") %>%
+  bind_tf_idf(
+    term = bigram,
+    document = row_id,
+    n = n
+  )
 
-# View samples
-head(twitter_unigrams, n = 10)
-head(twitter_bigrams, n = 10)
+head(bigram_train, n = 10)
+
+top_bigram_words <- bigram_train %>%
+  count(bigram, sort = TRUE) %>%
+  slice_head(n = 5000) %>%
+  pull(bigram)
+
+bigram_train <- bigram_train %>%
+  filter(bigram %in% top_bigram_words)
+
+bigram_train_wide <- bigram_train %>%
+  select(row_id, sentiment, bigram, tf_idf) %>%
+  pivot_wider(
+    names_from = bigram,
+    values_from = tf_idf,
+    values_fill = 0,
+    names_prefix = "bigram_"
+  )
 ```
 
-```{=html}
-<script>
-window.onload = function() {
-  var buttons = document.querySelectorAll("button.code-folding-btn");
-  buttons.forEach(function(btn) {
-    if (btn.innerText.trim() === "Show") {
-      btn.innerText = "Show Code";
-    }
-    if (btn.innerText.trim() === "Hide") {
-      btn.innerText = "Hide Code";
-    }
-  });
-};
-</script>
+## Visualizations
+
+### Frequency Word Cloud
+```{r}
+unigram_word_counts <- unigram_train %>%
+  group_by(word) %>%
+  summarise(total_n = sum(n), .groups = "drop") %>%
+  arrange(desc(total_n))
+
+wordcloud(
+  words = unigram_word_counts$word,
+  freq = unigram_word_counts$total_n,
+  max.words = 100,
+  random.order = FALSE,
+  colors = brewer.pal(8, "Dark2")
+)
 ```
+
+
+### Bigram Network Graph
+
+Note swine flu, jonas brothers, harry potter - dataset is from 2009
+```{r}
+
+bigram_train_sep <- twitter_cleaned %>%
+  unnest_tokens(bigram, text, token = "ngrams", n=2)  %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  drop_na(word1, word2) %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) 
+
+bigram_graph <- bigram_train_sep %>%
+  count(word1, word2) %>%
+  filter(n > 20) %>%
+  graph_from_data_frame()
+
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.07, 'inches')) +
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
+
