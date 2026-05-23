@@ -128,7 +128,7 @@ twitter_cleaned <- twitter_cleaned %>%
   select(row_id, sentiment, text)
 ```
 
-### Testing/Training Split
+## Testing/Training Split
 We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance. 
 
 ```{r}
@@ -145,7 +145,9 @@ twitter_train <- training(twitter_split)
 twitter_test <- testing(twitter_split)
 ```
 
-## Tokenizing/TF-IDF for Training Data
+## Tokenizing/TF-IDF
+
+### Training Data
 
 ```{r}
 # Unigrams TF-IDF
@@ -178,6 +180,7 @@ unigram_train_wide <- unigram_train %>%
     names_prefix = "word_"
   )
 ```
+
 
 ```{r}
 # Bigrams TF-IDF
@@ -213,6 +216,86 @@ bigram_train_wide <- bigram_train %>%
     names_prefix = "bigram_"
   )
 ```
+
+### Testing Data
+
+We have to put the testing data in the same format. However, we don't want the TF-IDF values for words that were only in the test set, because if we are treating it as 'new data' we wouldn't have access to it.
+
+```{r}
+# Unigram Testing Data
+unigram_test <- twitter_test %>%
+  select(row_id, sentiment, text) %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word") %>%
+  filter(word %in% top_unigram_words) %>%  # keep only words that were used in train tf-idf
+  count(row_id, sentiment, word, name = "n") %>%
+  bind_tf_idf(
+    term = word,
+    document = row_id,
+    n = n
+  )
+
+unigram_test_wide <- unigram_test %>%
+  select(row_id, sentiment, word, tf_idf) %>%
+  pivot_wider(
+    names_from = word,
+    values_from = tf_idf,
+    values_fill = 0,
+    names_prefix = "word_"
+  )
+
+# to match number of cols, fill in 0's for words that were in training but not in testing
+# after, both data frames should have 5002 columns (5000 words + sentiment + row_id)
+missing_unigram_cols <- setdiff(
+  names(unigram_train_wide),
+  names(unigram_test_wide)
+)
+
+unigram_test_wide[missing_unigram_cols] <- 0
+
+unigram_test_wide <- unigram_test_wide %>%
+  select(all_of(names(unigram_train_wide)))
+```
+
+```{r}
+# Bigram Testing data
+bigram_test <- twitter_test %>%
+  select(row_id, sentiment, text) %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  separate(bigram, into = c("word1", "word2"), sep = " ") %>%
+  drop_na(word1, word2) %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>%
+  unite(bigram, word1, word2, sep = " ") %>%
+  filter(bigram %in% top_bigram_words) %>%   #do same as unigrams
+  count(row_id, sentiment, bigram, name = "n") %>%
+  bind_tf_idf(
+    term = bigram,
+    document = row_id,
+    n = n
+  )
+
+bigram_test_wide <- bigram_test %>%
+  select(row_id, sentiment, bigram, tf_idf) %>%
+  pivot_wider(
+    names_from = bigram,
+    values_from = tf_idf,
+    values_fill = 0,
+    names_prefix = "bigram_"
+  )
+
+# Match column number again
+missing_bigram_cols <- setdiff(
+  names(bigram_train_wide),
+  names(bigram_test_wide)
+)
+
+bigram_test_wide[missing_bigram_cols] <- 0
+
+bigram_test_wide <- bigram_test_wide %>%
+  select(all_of(names(bigram_train_wide)))
+```
+
 
 ## Visualizations
 
@@ -258,5 +341,60 @@ ggraph(bigram_graph, layout = "fr") +
   geom_node_point(color = "lightblue", size = 5) +
   geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
   theme_void()
+```
+
+
+
+
+
+
+
+
+
+
+## Sparsity of Test Matrices
+
+This is useful for the results later -  the first code chunk shows how sparse the test dataframe is, the second shows the median number of words that was matched to TF-IDF values from the training. This is important because the more words that are the same, the better our model is going to do.
+
+### Unigram Sparsity
+```{r}
+unigram_predictors <- unigram_test_wide %>%
+  select(-row_id, -sentiment)
+
+mean(unigram_predictors == 0)
+```
+
+```{r}
+unigram_test_wide %>%
+  mutate(nonzero_unigrams = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
+  summarise(
+    min_nonzero = min(nonzero_unigrams),
+    mean_nonzero = mean(nonzero_unigrams),
+    median_nonzero = median(nonzero_unigrams),
+    max_nonzero = max(nonzero_unigrams)
+  )
+```
+
+
+### Bigram Sparsity
+
+Note that for bigrams the median is lower so the model is likely going to do worse. This is partly because tweets are very short, so each tweet only has a few bigrams and since bigrams are more unique we are less likely to have seen it in the training data.
+
+```{r}
+bigram_predictors <- bigram_test_wide %>%
+  select(-row_id, -sentiment)
+
+mean(bigram_predictors == 0)
+```
+
+```{r}
+bigram_test_wide %>%
+  mutate(nonzero_bigrams = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
+  summarise(
+    min_nonzero = min(nonzero_bigrams),
+    mean_nonzero = mean(nonzero_bigrams),
+    median_nonzero = median(nonzero_bigrams),
+    max_nonzero = max(nonzero_bigrams)
+  )
 ```
 
