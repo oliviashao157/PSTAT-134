@@ -120,7 +120,6 @@ twitter_cleaned <- twitter_cleaned %>%
 
 ```
 
-
 ```{r}
 # First create row_id entry for each tweet, select only row_id, sentiment vaue, and text
 twitter_cleaned <- twitter_cleaned %>%
@@ -129,7 +128,8 @@ twitter_cleaned <- twitter_cleaned %>%
 ```
 
 ## Testing/Training Split
-We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance. 
+
+We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance.
 
 ```{r}
 # Testing Training Split
@@ -180,7 +180,6 @@ unigram_train_wide <- unigram_train %>%
     names_prefix = "word_"
   )
 ```
-
 
 ```{r}
 # Bigrams TF-IDF
@@ -296,10 +295,74 @@ bigram_test_wide <- bigram_test_wide %>%
   select(all_of(names(bigram_train_wide)))
 ```
 
+## Creating Recipe
+
+### Set Up a 5 Folds Cross-Validation
+
+```{r}
+#Unigram 5-fold CV
+unigram_folds <- vfold_cv(unigram_train_wide, v = 5, strata = sentiment)
+
+unigram_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
+  # tells model to ignore "row_id" so it doesn't use it as a predictor
+  update_role(row_id, new_role = "ID")
+  #step_nzv(all_predictors()) # removes near-zero variance predictors to speed up computation and rule out unlikely predictors
+```
+
+```{r}
+#Bigram 5-fold CV
+bigram_folds <- vfold_cv(bigram_train_wide, v = 5, strata = sentiment)
+
+bigram_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
+  update_role(row_id, new_role = "ID") %>% 
+  step_nzv(all_predictors())
+```
+
+### Creating the Model and Workflow
+
+We will be using a Lasso Logistic Regression model
+
+```{r}
+#Unigram Model
+# Define the Lasso Logistic Regression model
+lasso_spec <- logistic_reg(
+  penalty = tune(), 
+  mixture = 1) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+unigram_lasso_wf <- workflow() %>%
+  add_recipe(unigram_rec) %>%
+  add_model(lasso_spec)
+```
+
+```{r}
+#Bigram Model
+bigram_lasso_wf <- workflow() %>% 
+  add_recipe(bigram_rec) %>% 
+  add_model(lasso_spec)
+```
+
+## Tuning and Gridding
+### Run the Model + Fit Workflow onto Training Data
+
+```{r}
+#Unigram Model
+lasso_grid <- grid_regular(penalty(), levels = 30)
+lasso_tune <- tune_grid(unigram_lasso_wf,
+  resamples = unigram_folds,
+  grid = lasso_grid)
+
+show_best(lasso_tune, metric = "roc_auc")
+
+```
+
+
 
 ## Visualizations
 
 ### Frequency Word Cloud
+
 ```{r}
 unigram_word_counts <- unigram_train %>%
   group_by(word) %>%
@@ -315,10 +378,10 @@ wordcloud(
 )
 ```
 
-
 ### Bigram Network Graph
 
 Note swine flu, jonas brothers, harry potter - dataset is from 2009
+
 ```{r}
 
 bigram_train_sep <- twitter_cleaned %>%
@@ -343,20 +406,12 @@ ggraph(bigram_graph, layout = "fr") +
   theme_void()
 ```
 
-
-
-
-
-
-
-
-
-
 ## Sparsity of Test Matrices
 
-This is useful for the results later -  the first code chunk shows how sparse the test dataframe is, the second shows the median number of words that was matched to TF-IDF values from the training. This is important because the more words that are the same, the better our model is going to do.
+This is useful for the results later - the first code chunk shows how sparse the test dataframe is, the second shows the median number of words that was matched to TF-IDF values from the training. This is important because the more words that are the same, the better our model is going to do.
 
 ### Unigram Sparsity
+
 ```{r}
 unigram_predictors <- unigram_test_wide %>%
   select(-row_id, -sentiment)
@@ -374,7 +429,6 @@ unigram_test_wide %>%
     max_nonzero = max(nonzero_unigrams)
   )
 ```
-
 
 ### Bigram Sparsity
 
@@ -397,4 +451,3 @@ bigram_test_wide %>%
     max_nonzero = max(nonzero_bigrams)
   )
 ```
-
