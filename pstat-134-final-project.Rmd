@@ -314,8 +314,7 @@ unigram_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
 bigram_folds <- vfold_cv(bigram_train_wide, v = 5, strata = sentiment)
 
 bigram_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
-  update_role(row_id, new_role = "ID") %>% 
-  step_nzv(all_predictors())
+  update_role(row_id, new_role = "ID")
 ```
 
 ### Creating the Model and Workflow
@@ -324,7 +323,7 @@ We will be using a Lasso Logistic Regression model
 
 ```{r}
 #Unigram Model
-# Define the Lasso Logistic Regression model
+# define Lasso Logistic Regression model
 lasso_spec <- logistic_reg(
   penalty = tune(), 
   mixture = 1) %>%
@@ -346,6 +345,8 @@ bigram_lasso_wf <- workflow() %>%
 ## Tuning and Gridding
 ### Run the Model + Fit Workflow onto Training Data
 
+**First, we are going to test a lasso logistic regression model on unigram/bigram training data**
+
 ```{r}
 #Unigram Model
 lasso_grid <- grid_regular(penalty(), levels = 30)
@@ -356,7 +357,58 @@ lasso_tune <- tune_grid(unigram_lasso_wf,
 show_best(lasso_tune, metric = "roc_auc")
 
 ```
+```{r}
+#Bigram Model
+lasso_grid <- grid_regular(penalty(), levels = 30)
+bi_lasso_tune <- tune_grid(bigram_lasso_wf,
+  resamples = bigram_folds,
+  grid = lasso_grid)
 
+show_best(bi_lasso_tune, metric = "roc_auc")
+```
+
+**Now, we will try a Support Vector Machine (SVM) model**
+
+```{r}
+#Unigram SVM Model
+uni_svm_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
+  update_role(row_id, new_role = "ID")
+
+svm_spec <- svm_linear(cost = tune()) %>%
+  set_engine("LiblineaR") %>%
+  set_mode("classification")
+
+unigram_svm_wf <- workflow() %>%
+  add_recipe(uni_svm_rec) %>%
+  add_model(svm_spec)
+
+svm_grid <- grid_regular(cost(), levels = 5)
+
+svm_tune <- tune_grid(unigram_svm_wf,
+  resamples = unigram_folds,
+  grid = svm_grid,
+  metrics = metric_set(accuracy))
+
+show_best(svm_tune, metric = "accuracy")
+```
+
+```{r}
+bi_svm_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
+  update_role(row_id, new_role = "ID")
+
+bigram_svm_wf <- workflow() %>% 
+  add_recipe(bi_svm_rec) %>% 
+  add_model(svm_spec)
+
+bi_svm_tune <- tune_grid(bigram_svm_wf,
+  resamples = bigram_folds,
+  grid = svm_grid,
+  metrics = metric_set(accuracy))
+
+show_best(bi_svm_tune, metric = "accuracy")
+
+
+```
 
 
 ## Visualizations
