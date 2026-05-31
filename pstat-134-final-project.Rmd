@@ -507,24 +507,21 @@ bigram_test_wide %>%
 
 ## Fitting the Best Model on the Test Set
 
-Cross-validation identified the Lasso logistic regression as the strongest model for both the unigram and bigram feature sets. Here we take the best model from cross-validation, fit it on the full training data, and apply it **once** to the held-out test set. This gives an honest estimate of how each model performs on unseen tweets.
-
-For each feature set we (1) `select_best()` the penalty chosen by cross-validation, (2) `finalize_workflow()` to lock that penalty in, (3) `fit()` on the full training matrix, and (4) `predict()` on the test matrix. Because our TF-IDF features were built outside the recipe (the training and test matrices are separate data frames), we use `fit()` + `predict()` here rather than `last_fit()`.
+Cross-validation identified the Lasso logistic regression as the strongest model for both the unigram and bigram feature sets. Here we take the best model from cross-validation, fit it on the full training data, and apply it to the test set. This gives an honest estimate of how each model performs on unseen tweets.
 
 ### Unigram Model
 
 ```{r}
-# 1. Pull the best penalty from cross-validation (ranked by roc_auc)
+# Pull the best penalty from cv (ranked by roc_auc)
 best_unigram <- select_best(lasso_tune, metric = "roc_auc")
 
-# 2. Lock that penalty into the workflow
+#Lock that penalty into the workflow
 final_unigram_wf <- finalize_workflow(unigram_lasso_wf, best_unigram)
 
-# 3. Fit the finalized model on the FULL unigram training data
+# Fit the finalized model on the FULL unigram training data
 unigram_final_fit <- fit(final_unigram_wf, data = unigram_train_wide)
 
-# 4. Apply the fitted model ONCE to the held-out unigram test set.
-#    Keep the true label alongside the predicted probabilities and class.
+# Apply the fitted model ONCE to the  unigram test set.
 unigram_test_pred <- unigram_test_wide %>%
   select(row_id, sentiment) %>%
   bind_cols(
@@ -554,5 +551,3 @@ bigram_test_pred <- bigram_test_wide %>%
 
 head(bigram_test_pred)
 ```
-
-The objects `unigram_test_pred` and `bigram_test_pred` now hold, for every test tweet, the true sentiment together with the model's predicted probabilities and predicted class. These are the inputs for the performance comparison (ROC AUC, accuracy, and confusion matrix) in the next section.
