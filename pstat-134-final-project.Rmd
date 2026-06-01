@@ -503,3 +503,51 @@ bigram_test_wide %>%
     max_nonzero = max(nonzero_bigrams)
   )
 ```
+
+
+## Fitting the Best Model on the Test Set
+
+Cross-validation identified the Lasso logistic regression as the strongest model for both the unigram and bigram feature sets. Here we take the best model from cross-validation, fit it on the full training data, and apply it to the test set. This gives an honest estimate of how each model performs on unseen tweets.
+
+### Unigram Model
+
+```{r}
+# Pull the best penalty from cv (ranked by roc_auc)
+best_unigram <- select_best(lasso_tune, metric = "roc_auc")
+
+#Lock that penalty into the workflow
+final_unigram_wf <- finalize_workflow(unigram_lasso_wf, best_unigram)
+
+# Fit the finalized model on the FULL unigram training data
+unigram_final_fit <- fit(final_unigram_wf, data = unigram_train_wide)
+
+# Apply the fitted model ONCE to the  unigram test set.
+unigram_test_pred <- unigram_test_wide %>%
+  select(row_id, sentiment) %>%
+  bind_cols(
+    predict(unigram_final_fit, new_data = unigram_test_wide, type = "prob"),
+    predict(unigram_final_fit, new_data = unigram_test_wide, type = "class")
+  )
+
+head(unigram_test_pred)
+```
+
+### Bigram Model
+
+```{r}
+# Same procedure for the bigram feature set
+best_bigram <- select_best(bi_lasso_tune, metric = "roc_auc")
+
+final_bigram_wf <- finalize_workflow(bigram_lasso_wf, best_bigram)
+
+bigram_final_fit <- fit(final_bigram_wf, data = bigram_train_wide)
+
+bigram_test_pred <- bigram_test_wide %>%
+  select(row_id, sentiment) %>%
+  bind_cols(
+    predict(bigram_final_fit, new_data = bigram_test_wide, type = "prob"),
+    predict(bigram_final_fit, new_data = bigram_test_wide, type = "class")
+  )
+
+head(bigram_test_pred)
+```
