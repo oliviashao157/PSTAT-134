@@ -551,3 +551,106 @@ bigram_test_pred <- bigram_test_wide %>%
 
 head(bigram_test_pred)
 ```
+## Model Performance Comparison
+
+### Finalize and Fit Models
+```{r}
+# --- Lasso ---
+# Unigram Lasso: best penalty
+best_unigram_lasso <- select_best(lasso_tune, metric = "roc_auc")
+final_unigram_lasso_wf <- finalize_workflow(unigram_lasso_wf, best_unigram_lasso)
+final_unigram_lasso_fit <- fit(final_unigram_lasso_wf, data = unigram_train_wide)
+
+# Bigram Lasso: best penalty
+best_bigram_lasso <- select_best(bi_lasso_tune, metric = "roc_auc")
+final_bigram_lasso_wf <- finalize_workflow(bigram_lasso_wf, best_bigram_lasso)
+final_bigram_lasso_fit <- fit(final_bigram_lasso_wf, data = bigram_train_wide)
+
+# --- SVM ---
+# Unigram SVM: best cost
+best_unigram_svm <- select_best(svm_tune, metric = "accuracy")
+final_unigram_svm_wf <- finalize_workflow(unigram_svm_wf, best_unigram_svm)
+final_unigram_svm_fit <- fit(final_unigram_svm_wf, data = unigram_train_wide)
+
+# Bigram SVM: best cost
+best_bigram_svm <- select_best(bi_svm_tune, metric = "accuracy")
+final_bigram_svm_wf <- finalize_workflow(bigram_svm_wf, best_bigram_svm)
+final_bigram_svm_fit <- fit(final_bigram_svm_wf, data = bigram_train_wide)
+```
+
+### ROC AUC + Accuracy Comparison Table
+```{r}
+
+
+get_metrics <- function(fit, test_data, model_name, calc_roc = TRUE) {
+  pred_class <- predict(fit, test_data) %>%
+    bind_cols(test_data %>% select(sentiment))
+  
+  acc <- accuracy(pred_class, truth = sentiment, estimate = .pred_class)
+  
+  if (calc_roc) {
+    pred_prob <- predict(fit, test_data, type = "prob") %>%
+      bind_cols(test_data %>% select(sentiment))
+    roc <- roc_auc(pred_prob, truth = sentiment, .pred_Negative)
+    roc_val <- roc$.estimate
+  } else {
+    roc_val <- NA  # SVM doesn't support prob
+  }
+  
+  tibble(
+    Model = model_name,
+    ROC_AUC = roc_val,
+    Accuracy = acc$.estimate
+  )
+}
+
+results <- bind_rows(
+  get_metrics(final_unigram_lasso_fit, unigram_test_wide, "Unigram Lasso", calc_roc = TRUE),
+  get_metrics(final_bigram_lasso_fit,  bigram_test_wide,  "Bigram Lasso",  calc_roc = TRUE),
+  get_metrics(final_unigram_svm_fit,   unigram_test_wide, "Unigram SVM",   calc_roc = FALSE),
+  get_metrics(final_bigram_svm_fit,    bigram_test_wide,  "Bigram SVM",    calc_roc = FALSE)
+)
+
+results %>%
+  arrange(desc(ROC_AUC)) %>%
+  knitr::kable(digits = 4, caption = "Model Performance on Test Set")
+```
+### Confusion Matrices
+```{r}
+# Function to plot confusion matrix
+plot_conf_mat <- function(fit, test_data, model_name) {
+  preds <- predict(fit, test_data) %>%
+    bind_cols(test_data %>% select(sentiment))
+  
+  conf_mat(preds, truth = sentiment, estimate = .pred_class) %>%
+    autoplot(type = "heatmap") +
+    ggtitle(paste("Confusion Matrix:", model_name)) +
+    theme_minimal()
+}
+
+plot_conf_mat(final_unigram_lasso_fit, unigram_test_wide, "Unigram Lasso")
+plot_conf_mat(final_bigram_lasso_fit,  bigram_test_wide,  "Bigram Lasso")
+plot_conf_mat(final_unigram_svm_fit,   unigram_test_wide, "Unigram SVM")
+plot_conf_mat(final_bigram_svm_fit,    bigram_test_wide,  "Bigram SVM")
+```
+### ROC Curves
+```{r}
+# Function to get ROC curve data
+get_roc_curve <- function(fit, test_data, model_name) {
+  predict(fit, test_data, type = "prob") %>%
+    bind_cols(test_data %>% select(sentiment)) %>%
+    roc_curve(truth = sentiment, .pred_Negative) %>%
+    mutate(Model = model_name)
+}
+
+bind_rows(
+  get_roc_curve(final_unigram_lasso_fit, unigram_test_wide, "Unigram Lasso"),
+  get_roc_curve(final_bigram_lasso_fit,  bigram_test_wide,  "Bigram Lasso")
+) %>%
+  ggplot(aes(x = 1 - specificity, y = sensitivity, color = Model)) +
+  geom_line(linewidth = 1) +
+  geom_abline(lty = 2, color = "gray") +
+  labs(title = "ROC Curves: Lasso Models", x = "1 - Specificity", y = "Sensitivity") +
+  theme_minimal()
+```
+
