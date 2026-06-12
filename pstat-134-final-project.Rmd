@@ -39,21 +39,54 @@ library(igraph)
 library(ggraph)
 ```
 
-## Data Cleaning
 
-Here is what was done in the data cleaning process:
 
-1.  Added column names per project_memo submitted previously
-2.  Checked for the following:
-    1.  Missing values
-    2.  Duplicated rows
-3.  Checked the levels of columns and removed the columns that had one level and weren't useful
-4.  Split the `date` column into `date` and `time_pdt`
-5.  Binarized sentiment
-6.  Cleaned up `text` column
-7.  Tokenized and removed stop words for both unigrams and bigrams for future feature extraction
 
-```{r}
+
+
+
+## Introduction
+
+  Twitter produces huge volumes of short, informal text every day, and automatically detecting whether a message is positive or negative is useful for tasks like brand monitoring and public-opinion research. In this project we build a sentiment classifier that takes the raw text of a tweet and predicts whether its sentiment is positive or negative. Our goal is predictive rather than explanatory: we want a model that generalizes to unseen tweets. We use the Sentiment140 [dataset](https://www.kaggle.com/datasets/kazanova/sentiment140) (Go, Bhayani, and Huang, 2009) from Kaggle, which contains about 1.6 million English tweets evenly split between positive and negative sentiment, each labeled automatically from emoticons. The original labels (0 = negative, 4 = positive) are recoded into a binary outcome where 0 = negative and 1 = positive, with the tweet text as our only predictor. We address two questions: can tweet text be accurately classified as positive or negative using TF-IDF features and standard linear models, and does a model built on bigrams alone classify sentiment better or worse than one built on unigrams alone?
+
+
+## Methods Overview
+
+  **Data Preprocessing:** We began by utilizing a representative sample of 50,000 tweets from the larger Sentiment140 dataset. To prepare the text for modeling, we first isolated our desired variable which is just the sentiment outcome variable, and converted the sentiment outcome into a binary "Negative" and "Positive" factor. As part of the next step, the raw tweet text underwent a rigorous standardization process. All strings were converted to lowercase to ensure uniformity. We employed regular expressions to strip out user mentions, URLs, standard English contractions, numerical digits, and punctuation. Extra whitespace was removed, reducing each tweet to clean alphabetical sequences.
+  
+  **Feature Engineering and Tokenization:** To ensure balanced class representation during evaluation, the cleaned dataset was split into an 80% training set and a 20% testing set, stratified by the sentiment label. We then constructed two distinct feature spaces to answer our comparative research question: one based on unigrams (single words) and another on bigrams (two-word phrases). Standard English stop words were filtered out of both token sets to reduce noise. We then transformed the tokens into numerical features using Term Frequency-Inverse Document Frequency (TF-IDF), a system that weighs words based on how frequently they appear in a specific tweet relative to how rare they are across the entire dataset. A high TF-IDF signals the strong importance of a word or phrase. To manage high dimensionality as well as computational efficiency, we restricted our feature matrices to only the top 5,000 most frequent unigrams and the top 5,000 most frequent bigrams present in the training data. The testing sets were carefully aligned to these exact vocabularies, with any terms missing from the test tweets assigned a value of zero.
+  
+The TF-IDF value for a term \(t\) in document \(d\) is calculated as:
+
+$$
+\text{TF-IDF}(t,d) = \text{TF}(t,d) \times \text{IDF}(t)
+$$
+
+where term frequency(TF) is:
+
+$$
+\text{TF}(t,d) = \frac{n_{t,d}}{\sum_k n_{k,d}}
+$$
+
+and inverse document frequency(IDF) is:
+
+$$
+\text{IDF}(t) = \log\left(\frac{N}{df_t}\right)
+$$
+
+
+In our case, each document is an individual tweet. Here, \(n_{t,d}\) is the number of times the term \(t\) appears in the tweet \(d\), while \(N\) is the total number of tweets, and \(df_t\) is the number of tweets containing the term \(t\). 
+  
+  **Model Training and Evaluation:** For our models, we evaluated two classification algorithms: Lasso Logistic Regression and a Support Vector Machine (SVM) with a linear kernel. Each algorithm was trained independently on both the unigram and bigram feature sets, resulting in four distinct models. In addition, hyperparameter tuning was conducted using 5-fold cross-validation on the training set, stratified by sentiment. For the Lasso logistic regression, we searched across a 30-level grid to identify the optimal L1 penalty that maximized the ROC-AUC curve. For the SVM models, we tuned the cost parameter over a 5-level grid. Because our chosen SVM implementation functions as a maximum margin classifier and does not natively output calibrated class probabilities, we optimized the SVM hyperparameter grid based on overall classification accuracy rather than ROC-AUC. Following cross-validation, the optimal hyperparameters for each of the four models were locked in, fit to the entire training matrix, and evaluated on the held-out testing data.
+  
+  
+## Project Steps
+
+### Data Cleaning
+
+In the data cleaning process, we first added back the column names to the data. Next, we checked for both missing values and duplicated rows, but there were none. We then binarized the sentiment (0 = negative, 1 = positive), and cleaned up parts of the text column. After, we added a `row_id` variable to keep track of each tweet's number. To filter the columns for future processing, we kept only the `row_id`, `sentiment`, and `text` columns.
+
+```{r, results = 'hide'}
 # load the dataset
 twitter <- read_csv("sample_50k.csv")
 # adding back the column names
@@ -64,6 +97,7 @@ twitter %>%
   count(sentiment)
 # Check for missing values
 colSums(is.na(twitter))
+
 # Check summary stats for sentiment
 summary(twitter$sentiment)
 # Check for duplicated rows
@@ -75,6 +109,7 @@ unique(twitter$query)
 twitter_cleaned <- twitter %>% select(-query)
 
 # Split date column into date, time, and time_zone
+# this was done in case we wanted to look at the distribution of tweets by date
 twitter_cleaned <- twitter_cleaned %>%
   mutate(date_raw = date) %>%
   mutate(
@@ -96,8 +131,8 @@ twitter_cleaned <- twitter_cleaned %>%
   select(-parsed_dt, -date_raw)
 
 unique(twitter_cleaned$time_zone)
-# I noticed that every time zone in the dataset is in PDT so I drop the column.
-# And renamed the time column into time_pdt
+# every time zone in the dataset is in PDT so the column is dropped
+# renamed the time column into time_pdt
 twitter_cleaned <- twitter_cleaned %>% select(-time_zone)
 twitter_cleaned <- twitter_cleaned %>%
   rename(time_pdt = time)
@@ -111,25 +146,22 @@ twitter_cleaned <- twitter_cleaned %>%
   mutate(text = str_to_lower(text),                          # lowercase
          text = str_remove_all(text, "@\\w+"),               # remove @mentions
          text = str_remove_all(text, "http\\S+|www\\S+"),    # remove URLs
-         text = str_remove_all(text, "\\bi['’]ll\\b"),       # remove contractions
+         text = str_remove_all(text, "\\bi['’]ll\\b"),       # remove I-contractions
          text = str_remove_all(text, "\\bi['’]d\\b"),
          text = str_remove_all(text, "\\bi['’]m\\b"),
          text = str_remove_all(text, "\\bi['’]ve\\b"),
          text = str_remove_all(text, "[^a-z\\s]"),           # remove punctuation/numbers
          text = str_squish(text))                            # remove extra whitespace
 
-```
-
-```{r}
 # First create row_id entry for each tweet, select only row_id, sentiment vaue, and text
 twitter_cleaned <- twitter_cleaned %>%
   mutate(row_id = row_number()) %>%
   select(row_id, sentiment, text)
 ```
 
-## Testing/Training Split
+### Testing/Training Split
 
-We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance.
+We split our data at this point to avoid data leakage from our TF-IDF, which allows us to get a more accurate estimate of our model performance. Since the IDF component depends on how frequently terms appear across the corpus, computing TF-IDF before the split would let information from the test set to influence the feature weights. This would also result in an overestimate of our actual model performance, meaning the testing/training split has to happen first.
 
 ```{r}
 # Testing Training Split
@@ -138,18 +170,20 @@ set.seed(1)
 twitter_split <- initial_split(
   twitter_cleaned,
   prop = 0.80,
-  strata = sentiment
+  strata = sentiment # still stratify by sentiment even with balanced data
 )
 
 twitter_train <- training(twitter_split)
 twitter_test <- testing(twitter_split)
 ```
 
-## Tokenizing/TF-IDF
+### Tokenizing/TF-IDF
 
-### Training Data
+Next, we used `tidytext` to tokenize both the unigrams and bigrams and removed stop words from both sets of tokens. We then created the TF-IDF values to weight each unigram/bigram by its importance within the tweet as well as how rare it was in the training corpus. Next, we converted the TF-IDF data into wide format so it can be used by the machine learning models. As our personal devices had RAM limitations, we had to limit the wide format to only include the top 5000 unigrams and the top 5000 bigrams. At this point, we also put the testing data in the same format, making sure the testing and training matrices had the same columns, meaning that the matrices had the same unigram/bigram features. Meanwhile, the number of rows in the matrices can be different as the rows represent individual tweets in the training and test sets respectively.
 
 ```{r}
+### Training Data
+
 # Unigrams TF-IDF
 unigram_train <- twitter_train %>%
   unnest_tokens(word, text) %>%
@@ -161,8 +195,7 @@ unigram_train <- twitter_train %>%
     n = n
   )
 
-head(unigram_train, n = 10)
-
+# for limited RAM issues, taking the top 5000 features
 top_unigram_words <- unigram_train %>%
   count(word, sort = TRUE) %>%
   slice_head(n = 5000) %>%
@@ -171,17 +204,16 @@ top_unigram_words <- unigram_train %>%
 unigram_train <- unigram_train %>%
   filter(word %in% top_unigram_words)
 
+# convert to wide format
 unigram_train_wide <- unigram_train %>%
   select(row_id, sentiment, word, tf_idf) %>%
   pivot_wider(
     names_from = word,
     values_from = tf_idf,
     values_fill = 0,
-    names_prefix = "word_"
+    names_prefix = "word_"  # helps distinguish the features
   )
-```
 
-```{r}
 # Bigrams TF-IDF
 bigram_train <- twitter_train %>%
   unnest_tokens(bigram, text, token = "ngrams", n=2)  %>%
@@ -195,8 +227,6 @@ bigram_train <- twitter_train %>%
     document = row_id,
     n = n
   )
-
-head(bigram_train, n = 10)
 
 top_bigram_words <- bigram_train %>%
   count(bigram, sort = TRUE) %>%
@@ -214,13 +244,10 @@ bigram_train_wide <- bigram_train %>%
     values_fill = 0,
     names_prefix = "bigram_"
   )
-```
+
 
 ### Testing Data
 
-We have to put the testing data in the same format. However, we don't want the TF-IDF values for words that were only in the test set, because if we are treating it as 'new data' we wouldn't have access to it.
-
-```{r}
 # Unigram Testing Data
 unigram_test <- twitter_test %>%
   select(row_id, sentiment, text) %>%
@@ -254,9 +281,7 @@ unigram_test_wide[missing_unigram_cols] <- 0
 
 unigram_test_wide <- unigram_test_wide %>%
   select(all_of(names(unigram_train_wide)))
-```
 
-```{r}
 # Bigram Testing data
 bigram_test <- twitter_test %>%
   select(row_id, sentiment, text) %>%
@@ -295,125 +320,13 @@ bigram_test_wide <- bigram_test_wide %>%
   select(all_of(names(bigram_train_wide)))
 ```
 
-## Creating Recipe
+### Visualizations
 
-### Set Up a 5 Folds Cross-Validation
+To get a better sense of what the most common features were as well as the associations between terms, we used word clouds for the unigrams and a network graph for the bigrams.
 
-```{r}
-#Unigram 5-fold CV
-unigram_folds <- vfold_cv(unigram_train_wide, v = 5, strata = sentiment)
+#### Frequency Word Cloud
 
-unigram_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
-  # tells model to ignore "row_id" so it doesn't use it as a predictor
-  update_role(row_id, new_role = "ID")
-  #step_nzv(all_predictors()) # removes near-zero variance predictors to speed up computation and rule out unlikely predictors
-```
-
-```{r}
-#Bigram 5-fold CV
-bigram_folds <- vfold_cv(bigram_train_wide, v = 5, strata = sentiment)
-
-bigram_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
-  update_role(row_id, new_role = "ID")
-```
-
-### Creating the Model and Workflow
-
-We will be using a Lasso Logistic Regression model
-
-```{r}
-#Unigram Model
-# define Lasso Logistic Regression model
-lasso_spec <- logistic_reg(
-  penalty = tune(), 
-  mixture = 1) %>%
-  set_engine("glmnet") %>%
-  set_mode("classification")
-
-unigram_lasso_wf <- workflow() %>%
-  add_recipe(unigram_rec) %>%
-  add_model(lasso_spec)
-```
-
-```{r}
-#Bigram Model
-bigram_lasso_wf <- workflow() %>% 
-  add_recipe(bigram_rec) %>% 
-  add_model(lasso_spec)
-```
-
-## Tuning and Gridding
-### Run the Model + Fit Workflow onto Training Data
-
-**First, we are going to test a lasso logistic regression model on unigram/bigram training data**
-
-```{r}
-#Unigram Model
-lasso_grid <- grid_regular(penalty(), levels = 30)
-lasso_tune <- tune_grid(unigram_lasso_wf,
-  resamples = unigram_folds,
-  grid = lasso_grid)
-
-show_best(lasso_tune, metric = "roc_auc")
-
-```
-```{r}
-#Bigram Model
-lasso_grid <- grid_regular(penalty(), levels = 30)
-bi_lasso_tune <- tune_grid(bigram_lasso_wf,
-  resamples = bigram_folds,
-  grid = lasso_grid)
-
-show_best(bi_lasso_tune, metric = "roc_auc")
-```
-
-**Now, we will try a Support Vector Machine (SVM) model**
-
-```{r}
-#Unigram SVM Model
-uni_svm_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
-  update_role(row_id, new_role = "ID")
-
-svm_spec <- svm_linear(cost = tune()) %>%
-  set_engine("LiblineaR") %>%
-  set_mode("classification")
-
-unigram_svm_wf <- workflow() %>%
-  add_recipe(uni_svm_rec) %>%
-  add_model(svm_spec)
-
-svm_grid <- grid_regular(cost(), levels = 5)
-
-svm_tune <- tune_grid(unigram_svm_wf,
-  resamples = unigram_folds,
-  grid = svm_grid,
-  metrics = metric_set(accuracy))
-
-show_best(svm_tune, metric = "accuracy")
-```
-
-```{r}
-bi_svm_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
-  update_role(row_id, new_role = "ID")
-
-bigram_svm_wf <- workflow() %>% 
-  add_recipe(bi_svm_rec) %>% 
-  add_model(svm_spec)
-
-bi_svm_tune <- tune_grid(bigram_svm_wf,
-  resamples = bigram_folds,
-  grid = svm_grid,
-  metrics = metric_set(accuracy))
-
-show_best(bi_svm_tune, metric = "accuracy")
-
-
-```
-
-
-## Visualizations
-
-### Frequency Word Cloud
+This word cloud sorts the top words by frequency. The visualization suggests that people tend to tweet about daily life, feelings, and future plans. While it provides general information on the topics discussed in tweets, a comparison cloud is necessary to see how words are grouped based on the tweet's sentiment value.
 
 ```{r}
 unigram_word_counts <- unigram_train %>%
@@ -430,9 +343,35 @@ wordcloud(
 )
 ```
 
-### Bigram Network Graph
 
-Note swine flu, jonas brothers, harry potter - dataset is from 2009
+#### Comparison Cloud
+
+The comparison cloud below shows the most frequent words within each sentiment category. Negative tweets are largely associated with words that express disappointment and sorrow, whereas positive tweets are associated with words that express excitement and joy. This demonstrates that the connotations of individual words tend to align with the overall sentiment of the tweet, making unigram features useful for sentiment prediction.
+
+```{r}
+unigram_comparison_counts <- unigram_train %>%
+  group_by(word, sentiment) %>%
+  summarise(total_n = sum(n), .groups = "drop") %>%
+  pivot_wider(
+    names_from = sentiment,
+    values_from = total_n,
+    values_fill = 0
+  ) %>%
+  column_to_rownames("word") %>%
+  as.matrix()
+
+comparison.cloud(
+  unigram_comparison_counts,
+  max.words = 50,
+  random.order = FALSE,
+  colors = c("red", "blue"),
+  title.size = 1.5
+)
+```
+
+#### Bigram Network Graph
+
+Meanwhile, the network graph shows both how the words are linked and also which direction they follow. Some bigrams describe common phrases like "sweet dreams" and "fingers crossed" while others reflect relevant events or pop culture from when the dataset was collected, such as “Jonas Brothers,” “Harry Potter,” and “swine flu.” Bigrams capture more context as they allow for specific two word connections, but can also create more sparsity due to the specificity.
 
 ```{r}
 
@@ -458,102 +397,157 @@ ggraph(bigram_graph, layout = "fr") +
   theme_void()
 ```
 
-## Sparsity of Test Matrices
+### Sparsity of Test Matrices
 
-This is useful for the results later - the first code chunk shows how sparse the test dataframe is, the second shows the median number of words that was matched to TF-IDF values from the training. This is important because the more words that are the same, the better our model is going to do.
-
-### Unigram Sparsity
+One concern we noticed after creating the test TF-IDF matrices was that both matrices are very sparse, as shown by the proportion of zeros in the table below. However, for bigrams the median is lower than the unigrams, with a median of 1 bigram per tweet that was in both the testing set and the training set. This result is likely due to a couple of factors, such as the uniqueness of bigrams, tweets being very short, and the limitations on the feature space enforced earlier that kept only the top 5000 bigrams. In other words, both the natural structure of the data and the modeling limitations imposed may lead the bigram models to underperform in our results.
 
 ```{r}
-unigram_predictors <- unigram_test_wide %>%
-  select(-row_id, -sentiment)
+sparsity_table <- bind_rows(
+  # Unigram sparsity
+  unigram_test_wide %>%
+    mutate(nonzero_features = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
+    summarise(
+      model = "Unigram",
+      zero_proportion = mean(as.matrix(select(., -row_id, -sentiment, -nonzero_features)) == 0),
+      min_nonzero = min(nonzero_features),
+      mean_nonzero = mean(nonzero_features),
+      median_nonzero = median(nonzero_features),
+      max_nonzero = max(nonzero_features)),
+  
+  # Bigram sparsity
+  bigram_test_wide %>%
+    mutate(nonzero_features = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
+    summarise(
+      model = "Bigram",
+      zero_proportion = mean(as.matrix(select(., -row_id, -sentiment, -nonzero_features)) == 0),
+      min_nonzero = min(nonzero_features),
+      mean_nonzero = mean(nonzero_features),
+      median_nonzero = median(nonzero_features),
+      max_nonzero = max(nonzero_features))
+)
 
-mean(unigram_predictors == 0)
-```
-
-```{r}
-unigram_test_wide %>%
-  mutate(nonzero_unigrams = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
-  summarise(
-    min_nonzero = min(nonzero_unigrams),
-    mean_nonzero = mean(nonzero_unigrams),
-    median_nonzero = median(nonzero_unigrams),
-    max_nonzero = max(nonzero_unigrams)
-  )
-```
-
-### Bigram Sparsity
-
-Note that for bigrams the median is lower so the model is likely going to do worse. This is partly because tweets are very short, so each tweet only has a few bigrams and since bigrams are more unique we are less likely to have seen it in the training data.
-
-```{r}
-bigram_predictors <- bigram_test_wide %>%
-  select(-row_id, -sentiment)
-
-mean(bigram_predictors == 0)
-```
-
-```{r}
-bigram_test_wide %>%
-  mutate(nonzero_bigrams = rowSums(across(-c(row_id, sentiment), ~ .x != 0))) %>%
-  summarise(
-    min_nonzero = min(nonzero_bigrams),
-    mean_nonzero = mean(nonzero_bigrams),
-    median_nonzero = median(nonzero_bigrams),
-    max_nonzero = max(nonzero_bigrams)
-  )
+sparsity_table
 ```
 
 
-## Fitting the Best Model on the Test Set
+### 5 Fold Cross-Validation
 
-Cross-validation identified the Lasso logistic regression as the strongest model for both the unigram and bigram feature sets. Here we take the best model from cross-validation, fit it on the full training data, and apply it to the test set. This gives an honest estimate of how each model performs on unseen tweets.
-
-### Unigram Model
+After creating TF-IDF matrices, we used cross validation to tune our parameter values for our models using the training data. By splitting the training data into 5 folds, we can use each fold as the validation once, allowing us to gather the best penalty value for our lasso logistic regression and best cost for our SVM.
 
 ```{r}
-# Pull the best penalty from cv (ranked by roc_auc)
-best_unigram <- select_best(lasso_tune, metric = "roc_auc")
+#Unigram 5-fold CV
+unigram_folds <- vfold_cv(unigram_train_wide, v = 5, strata = sentiment)
 
-#Lock that penalty into the workflow
-final_unigram_wf <- finalize_workflow(unigram_lasso_wf, best_unigram)
+unigram_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
+  # tells model to ignore "row_id" so it doesn't use it as a predictor
+  update_role(row_id, new_role = "ID")
+  #step_nzv(all_predictors()) # removes near-zero variance predictors to speed up computation and rule out unlikely predictors
 
-# Fit the finalized model on the FULL unigram training data
-unigram_final_fit <- fit(final_unigram_wf, data = unigram_train_wide)
+#Bigram 5-fold CV
+bigram_folds <- vfold_cv(bigram_train_wide, v = 5, strata = sentiment)
 
-# Apply the fitted model ONCE to the  unigram test set.
-unigram_test_pred <- unigram_test_wide %>%
-  select(row_id, sentiment) %>%
-  bind_cols(
-    predict(unigram_final_fit, new_data = unigram_test_wide, type = "prob"),
-    predict(unigram_final_fit, new_data = unigram_test_wide, type = "class")
-  )
-
-head(unigram_test_pred)
+bigram_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
+  update_role(row_id, new_role = "ID")
 ```
 
-### Bigram Model
+### Creating the Model and Workflow
+
+We chose a lasso logistic regression model and a linear SVM because these classification models suit our sparse, high-dimensional, TF-IDF matrices. The workflow then combines the preprocessing recipe with the model, allowing our cross validation to run through the same preprocessing steps and model fitting process across each fold.
 
 ```{r}
-# Same procedure for the bigram feature set
-best_bigram <- select_best(bi_lasso_tune, metric = "roc_auc")
+#Unigram Model
+# define Lasso Logistic Regression model
+lasso_spec <- logistic_reg(
+  penalty = tune(), 
+  mixture = 1) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
 
-final_bigram_wf <- finalize_workflow(bigram_lasso_wf, best_bigram)
+unigram_lasso_wf <- workflow() %>%
+  add_recipe(unigram_rec) %>%
+  add_model(lasso_spec)
 
-bigram_final_fit <- fit(final_bigram_wf, data = bigram_train_wide)
-
-bigram_test_pred <- bigram_test_wide %>%
-  select(row_id, sentiment) %>%
-  bind_cols(
-    predict(bigram_final_fit, new_data = bigram_test_wide, type = "prob"),
-    predict(bigram_final_fit, new_data = bigram_test_wide, type = "class")
-  )
-
-head(bigram_test_pred)
+#Bigram Model
+bigram_lasso_wf <- workflow() %>% 
+  add_recipe(bigram_rec) %>% 
+  add_model(lasso_spec)
 ```
-## Model Performance Comparison
+
+### Tuning and Gridding
+
+Due to the long computational time for tuning the lasso logistic regression model with cross validation, the tuning grids are saved as an RDS file and then reloaded.
+
+```{r, eval = FALSE}
+#Unigram Model
+lasso_grid <- grid_regular(penalty(), levels = 30)
+lasso_tune <- tune_grid(unigram_lasso_wf,
+  resamples = unigram_folds,
+  grid = lasso_grid)
+
+#Bigram Model
+lasso_grid <- grid_regular(penalty(), levels = 30)
+bi_lasso_tune <- tune_grid(bigram_lasso_wf,
+  resamples = bigram_folds,
+  grid = lasso_grid)
+
+```
+
+#### Lasso Logistic Regression Tuning Results
+
+```{r}
+lasso_tune <- readRDS("lasso_tune.rds")
+bi_lasso_tune <- readRDS("bi_lasso_tune.rds")
+
+show_best(lasso_tune, metric = "roc_auc")
+show_best(bi_lasso_tune, metric = "roc_auc")
+```
+
+
+#### SVM Tuning Results
+
+```{r}
+#Unigram SVM Model
+uni_svm_rec <- recipe(sentiment ~ ., data = unigram_train_wide) %>%
+  update_role(row_id, new_role = "ID")
+
+svm_spec <- svm_linear(cost = tune()) %>%
+  set_engine("LiblineaR") %>%
+  set_mode("classification")
+
+unigram_svm_wf <- workflow() %>%
+  add_recipe(uni_svm_rec) %>%
+  add_model(svm_spec)
+
+svm_grid <- grid_regular(cost(), levels = 5)
+
+svm_tune <- tune_grid(unigram_svm_wf,
+  resamples = unigram_folds,
+  grid = svm_grid,
+  metrics = metric_set(accuracy))
+
+show_best(svm_tune, metric = "accuracy")
+
+#Bigram SVM model
+bi_svm_rec <- recipe(sentiment ~ ., data = bigram_train_wide) %>%
+  update_role(row_id, new_role = "ID")
+
+bigram_svm_wf <- workflow() %>% 
+  add_recipe(bi_svm_rec) %>% 
+  add_model(svm_spec)
+
+bi_svm_tune <- tune_grid(bigram_svm_wf,
+  resamples = bigram_folds,
+  grid = svm_grid,
+  metrics = metric_set(accuracy))
+
+show_best(bi_svm_tune, metric = "accuracy")
+```
+
 
 ### Finalize and Fit Models
+
+After tuning each model via 5-fold cross-validation on the training data, we selected the optimal hyperparameters for each classifier. For the Lasso logistic regression models, the best penalty was chosen by maximizing ROC-AUC across folds; for the SVM models, the best cost parameter was selected by maximizing cross-validated accuracy. Each finalized model was then re-fit on the full training set and evaluated on the held-out test set.
+
 ```{r}
 # --- Lasso ---
 # Unigram Lasso: best penalty
@@ -578,10 +572,14 @@ final_bigram_svm_wf <- finalize_workflow(bigram_svm_wf, best_bigram_svm)
 final_bigram_svm_fit <- fit(final_bigram_svm_wf, data = bigram_train_wide)
 ```
 
-### ROC AUC + Accuracy Comparison Table
+
+## Results
+
+### Performance Comparison Table
+
+The table below summarizes test-set performance across all four models. The Unigram Lasso achieved the strongest overall performance, with a ROC-AUC of 0.7953 and an accuracy of 72.11%. The Bigram Lasso followed with a ROC AUC of 0.7300 and an accuracy of 66.21%, a noticeable drop that reflects the higher sparsity of bigram features in the test data. The Unigram SVM and Bigram SVM achieved test accuracies of 71.64% and 66.32% respectively; because the SVM engine does not output class probabilities, ROC-AUC could not be computed for these models.
+
 ```{r}
-
-
 get_metrics <- function(fit, test_data, model_name, calc_roc = TRUE) {
   pred_class <- predict(fit, test_data) %>%
     bind_cols(test_data %>% select(sentiment))
@@ -615,7 +613,13 @@ results %>%
   arrange(desc(ROC_AUC)) %>%
   knitr::kable(digits = 4, caption = "Model Performance on Test Set")
 ```
+
+Moreover, the performance gap between unigram and bigram models is consistent with what we observed in the sparsity analysis. Specifically, sparsity reached 99.92% zeros in the unigram test matrix,, yet each tweet still matched a median of 4 nonzero words from the training vocabulary — enough signal for the model to classify most tweets. For the bigram test matrix, sparsity climbed to 99.98%, and the median number of matched bigrams per tweet dropped to just 1. Since tweets are extremely short (typically under 20 words after cleaning), each tweet contains only a handful of bigrams, and most are too infrequent to appear among the top 5,000 bigrams retained from training. As a result, many test tweets are represented by near-zero bigram feature vectors, severely limiting the bigram models' ability to classify them accurately.
+
 ### Confusion Matrices
+
+The confusion matrices provide a more granular view of each model's classification behavior. Both Lasso models demonstrated reasonably balanced performance across the Positive and Negative classes, correctly identifying the majority of tweets in each category. The Unigram Lasso produced the fewest misclassifications overall, with a relatively symmetric error pattern — meaning it did not disproportionately favor one class over the other. The Bigram Lasso showed a similar pattern but with a notably higher error rate in both directions, consistent with its lower overall accuracy of 66.21%. The SVM confusion matrices show accuracy levels comparable to their respective Lasso counterparts, though without probability outputs it is harder to assess where the decision boundary falls relative to the true class distribution.
+
 ```{r}
 # Function to plot confusion matrix
 plot_conf_mat <- function(fit, test_data, model_name) {
@@ -633,7 +637,11 @@ plot_conf_mat(final_bigram_lasso_fit,  bigram_test_wide,  "Bigram Lasso")
 plot_conf_mat(final_unigram_svm_fit,   unigram_test_wide, "Unigram SVM")
 plot_conf_mat(final_bigram_svm_fit,    bigram_test_wide,  "Bigram SVM")
 ```
+
 ### ROC Curves
+
+The ROC curves for the two Lasso models further illustrate the unigram model's advantage. The Unigram Lasso curve bows more sharply toward the upper-left corner of the plot relative to the Bigram Lasso curve, indicating stronger discriminative ability at virtually all classification thresholds. Both curves comfortably exceed the diagonal reference line (which represents random chance), confirming that both models have learned meaningful signal from the TF-IDF features. However, the area under the Unigram Lasso curve (0.7953) is noticeably larger than that of the Bigram Lasso (0.7300), reinforcing the conclusion that unigram features provide a richer and more consistent signal for sentiment classification on this dataset.
+
 ```{r}
 # Function to get ROC curve data
 get_roc_curve <- function(fit, test_data, model_name) {
@@ -654,3 +662,10 @@ bind_rows(
   theme_minimal()
 ```
 
+## Conclusion
+
+In this project, we successfully built and compared four sentiment classifiers for Twitter data using TF-IDF-weighted text features derived from a balanced sample of 50,000 tweets. The Unigram Lasso logistic regression performed best overall, achieving a ROC-AUC of 0.7953 and 72.11% test accuracy. We observed that unigram features consistently outperformed bigrams across both model types, which aligns with our sparsity analysis: with a median of only 1 matched bigram per test tweet, the bigram models had too little signal to classify reliably.
+
+However, the SVM models, while competitive on accuracy, could not produce class probabilities, limiting their usefulness in settings where threshold tuning matters. A potential next step we are thinking about would be to explore probability-calibrated SVM variants, or to reintroduce emoji and punctuation as sentiment features rather than discarding them during preprocessing.
+
+A more advanced enhancement would involve replacing bag-of-words TF-IDF features with pre-trained word embeddings such as BERT, which handle informal and abbreviated language more robustly. This could further improve classification quality and better capture the nuanced sentiment patterns common in social media text.
